@@ -95,37 +95,36 @@ class SolverWrapper(object):
     self.data_layer = RoIDataLayer(self.roidb, self.imdb.num_classes)
     self.data_layer_val = RoIDataLayer(self.valroidb, self.imdb.num_classes, random=True)
 
+    # Set the random seed for tensorflow
+    tf.set_random_seed(cfg.RNG_SEED)
+    # Build the main computation graph
 
+    # Define the loss
+    loss = layers['total_loss']
+    # Set learning rate and momentum
+    lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
+    momentum = cfg.TRAIN.MOMENTUM
+    self.optimizer = tf.train.MomentumOptimizer(lr, momentum)
+
+    # Compute the gradients wrt the loss
+    gvs = self.optimizer.compute_gradients(loss)
+    # Double the gradient of the bias if set
+    if cfg.TRAIN.DOUBLE_BIAS:
+      final_gvs = []
+      with tf.variable_scope('Gradient_Mult') as scope:
+        for grad, var in gvs:
+          scale = 1.
+          if cfg.TRAIN.DOUBLE_BIAS and '/biases:' in var.name:
+            scale *= 2.
+          if not np.allclose(scale, 1.0):
+            grad = tf.multiply(grad, scale)
+          final_gvs.append((grad, var))
+      train_op = self.optimizer.apply_gradients(final_gvs)
+    else:
+      train_op = self.optimizer.apply_gradients(gvs)
 
     # Determine different scales for anchors, see paper
     with sess.graph.as_default():
-      # Set the random seed for tensorflow
-      tf.set_random_seed(cfg.RNG_SEED)
-      # Build the main computation graph
-
-      # Define the loss
-      loss = layers['total_loss']
-      # Set learning rate and momentum
-      lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
-      momentum = cfg.TRAIN.MOMENTUM
-      self.optimizer = tf.train.MomentumOptimizer(lr, momentum)
-
-      # Compute the gradients wrt the loss
-      gvs = self.optimizer.compute_gradients(loss)
-      # Double the gradient of the bias if set
-      if cfg.TRAIN.DOUBLE_BIAS:
-        final_gvs = []
-        with tf.variable_scope('Gradient_Mult') as scope:
-          for grad, var in gvs:
-            scale = 1.
-            if cfg.TRAIN.DOUBLE_BIAS and '/biases:' in var.name:
-              scale *= 2.
-            if not np.allclose(scale, 1.0):
-              grad = tf.multiply(grad, scale)
-            final_gvs.append((grad, var))
-        train_op = self.optimizer.apply_gradients(final_gvs)
-      else:
-        train_op = self.optimizer.apply_gradients(gvs)
 
       # We will handle the snapshots ourselves
       self.saver = tf.train.Saver(max_to_keep=100000)
