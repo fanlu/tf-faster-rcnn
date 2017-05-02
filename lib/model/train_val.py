@@ -90,38 +90,12 @@ class SolverWrapper(object):
         print("It's likely that your checkpoint file has been compressed "
               "with SNAPPY.")
 
-  def train_model(self, sess, max_iters, layers):
+  def train_model(self, sess, max_iters, train_op):
     # Build data layers for both training and validation set
     self.data_layer = RoIDataLayer(self.roidb, self.imdb.num_classes)
     self.data_layer_val = RoIDataLayer(self.valroidb, self.imdb.num_classes, random=True)
 
-    # Set the random seed for tensorflow
-    tf.set_random_seed(cfg.RNG_SEED)
-    # Build the main computation graph
-
-    # Define the loss
-    loss = layers['total_loss']
-    # Set learning rate and momentum
-    lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
-    momentum = cfg.TRAIN.MOMENTUM
-    self.optimizer = tf.train.MomentumOptimizer(lr, momentum)
-
-    # Compute the gradients wrt the loss
-    gvs = self.optimizer.compute_gradients(loss)
-    # Double the gradient of the bias if set
-    if cfg.TRAIN.DOUBLE_BIAS:
-      final_gvs = []
-      with tf.variable_scope('Gradient_Mult') as scope:
-        for grad, var in gvs:
-          scale = 1.
-          if cfg.TRAIN.DOUBLE_BIAS and '/biases:' in var.name:
-            scale *= 2.
-          if not np.allclose(scale, 1.0):
-            grad = tf.multiply(grad, scale)
-          final_gvs.append((grad, var))
-      train_op = self.optimizer.apply_gradients(final_gvs)
-    else:
-      train_op = self.optimizer.apply_gradients(gvs)
+    lr=0.001
 
     # Determine different scales for anchors, see paper
     with sess.graph.as_default():
@@ -350,6 +324,34 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
                                         anchor_scales=cfg.ANCHOR_SCALES,
                                         anchor_ratios=cfg.ANCHOR_RATIOS)
 
+  # Set the random seed for tensorflow
+  tf.set_random_seed(cfg.RNG_SEED)
+  # Build the main computation graph
+
+  # Define the loss
+  loss = layers['total_loss']
+  # Set learning rate and momentum
+  lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
+  momentum = cfg.TRAIN.MOMENTUM
+  optimizer = tf.train.MomentumOptimizer(lr, momentum)
+
+  # Compute the gradients wrt the loss
+  gvs = optimizer.compute_gradients(loss)
+  # Double the gradient of the bias if set
+  if cfg.TRAIN.DOUBLE_BIAS:
+    final_gvs = []
+    with tf.variable_scope('Gradient_Mult') as scope:
+      for grad, var in gvs:
+        scale = 1.
+        if cfg.TRAIN.DOUBLE_BIAS and '/biases:' in var.name:
+          scale *= 2.
+        if not np.allclose(scale, 1.0):
+          grad = tf.multiply(grad, scale)
+        final_gvs.append((grad, var))
+    train_op = optimizer.apply_gradients(final_gvs)
+  else:
+    train_op = optimizer.apply_gradients(gvs)
+
   sv = tf.train.Supervisor(logdir="output/supervisor",
                            summary_op=None,
                            # save_summaries_secs=10,
@@ -363,5 +365,5 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
   sw = SolverWrapper(sess, network, imdb, roidb, valroidb, output_dir, tb_dir,
                      pretrained_model=pretrained_model)
   print('Solving...')
-  sw.train_model(sess, max_iters, layers)
+  sw.train_model(sess, max_iters, train_op)
   print('done solving')
