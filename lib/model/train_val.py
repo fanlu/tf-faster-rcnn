@@ -90,19 +90,19 @@ class SolverWrapper(object):
         print("It's likely that your checkpoint file has been compressed "
               "with SNAPPY.")
 
-  def train_model(self, sess, max_iters):
+  def train_model(self, sess, max_iters, layers):
     # Build data layers for both training and validation set
     self.data_layer = RoIDataLayer(self.roidb, self.imdb.num_classes)
     self.data_layer_val = RoIDataLayer(self.valroidb, self.imdb.num_classes, random=True)
+
+
 
     # Determine different scales for anchors, see paper
     with sess.graph.as_default():
       # Set the random seed for tensorflow
       tf.set_random_seed(cfg.RNG_SEED)
       # Build the main computation graph
-      layers = self.net.create_architecture(sess, 'TRAIN', self.imdb.num_classes, tag='default',
-                                            anchor_scales=cfg.ANCHOR_SCALES,
-                                            anchor_ratios=cfg.ANCHOR_RATIOS)
+
       # Define the loss
       loss = layers['total_loss']
       # Set learning rate and momentum
@@ -347,9 +347,22 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
   tfconfig = tf.ConfigProto(allow_soft_placement=True)
   tfconfig.gpu_options.allow_growth = True
 
-  with tf.Session(config=tfconfig) as sess:
-    sw = SolverWrapper(sess, network, imdb, roidb, valroidb, output_dir, tb_dir,
-                       pretrained_model=pretrained_model)
-    print('Solving...')
-    sw.train_model(sess, max_iters)
-    print('done solving')
+  layers = network.create_architecture(None, 'TRAIN', imdb.num_classes, tag='default',
+                                        anchor_scales=cfg.ANCHOR_SCALES,
+                                        anchor_ratios=cfg.ANCHOR_RATIOS)
+
+  sv = tf.train.Supervisor(logdir="output/supervisor",
+                           summary_op=None,
+                           # save_summaries_secs=10,
+                           # local_init_op=tf.local_variables_initializer(),
+                           # init_op=None,
+                           #init_fn=pre_load
+                           )
+  # with tf.Session(config=tfconfig) as sess:
+  # with sv.managed_session() as sess:
+  sess = sv.prepare_or_wait_for_session("")
+  sw = SolverWrapper(sess, network, imdb, roidb, valroidb, output_dir, tb_dir,
+                     pretrained_model=pretrained_model)
+  print('Solving...')
+  sw.train_model(sess, max_iters, layers)
+  print('done solving')
