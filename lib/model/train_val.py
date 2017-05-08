@@ -101,10 +101,10 @@ class SolverWrapper(object):
     with sess.graph.as_default():
 
       # We will handle the snapshots ourselves
-      self.saver = tf.train.Saver(max_to_keep=100000)
+      #self.saver = tf.train.Saver(max_to_keep=100000)
       # Write the train and validation information to tensorboard
       self.writer = tf.summary.FileWriter(self.tbdir, sess.graph)
-      self.valwriter = tf.summary.FileWriter(self.tbvaldir)
+      #self.valwriter = tf.summary.FileWriter(self.tbvaldir)
 
     # Find previous snapshots if there is any to restore from
     sfiles = os.path.join(self.output_dir, cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_*.ckpt.meta')
@@ -127,28 +127,7 @@ class SolverWrapper(object):
     ss_paths = sfiles
 
     if lsf == 0:
-      # Fresh train directly from ImageNet weights
-      print('Loading initial model weights from {:s}'.format(self.pretrained_model))
-      variables = tf.global_variables()
-
-      # Only initialize the variables that were not initialized when the graph was built
-      sess.run(tf.variables_initializer(variables, name='init'))
-      var_keep_dic = self.get_variables_in_checkpoint_file(self.pretrained_model)
-      variables_to_restore = []
-      var_to_dic = {}
-      # print(var_keep_dic)
-      for v in variables:
-          # exclude the conv weights that are fc weights in vgg16
-          if v.name == 'vgg_16/fc6/weights:0' or v.name == 'vgg_16/fc7/weights:0':
-            var_to_dic[v.name] = v
-            continue
-          if v.name.split(':')[0] in var_keep_dic:
-            print('Varibles restored: %s' % v.name)
-            variables_to_restore.append(v)
-
-      restorer = tf.train.Saver(variables_to_restore)
-      restorer.restore(sess, self.pretrained_model)
-      print('Loaded.')
+      variables_to_restore, var_to_dic = restore_variable(self.pretrained_model)
       sess.run(tf.assign(lr, cfg.TRAIN.LEARNING_RATE))
       # A temporary solution to fix the vgg16 issue from conv weights to fc weights
       if self.net._arch == 'vgg16':
@@ -310,6 +289,40 @@ def filter_roidb(roidb):
   return filtered_roidb
 
 
+def get_variables_in_checkpoint_file(file_name):
+  try:
+    reader = pywrap_tensorflow.NewCheckpointReader(file_name)
+    var_to_shape_map = reader.get_variable_to_shape_map()
+    return var_to_shape_map
+  except Exception as e:  # pylint: disable=broad-except
+    print(str(e))
+    if "corrupted compressed block contents" in str(e):
+      print("It's likely that your checkpoint file has been compressed "
+            "with SNAPPY.")
+
+def restore_variable(pretrained_model):
+  # Fresh train directly from ImageNet weights
+  print('Loading initial model weights from {:s}'.format(pretrained_model))
+  variables = tf.global_variables()
+
+  # Only initialize the variables that were not initialized when the graph was built
+  # sess.run(tf.variables_initializer(variables, name='init'))
+  var_keep_dic = get_variables_in_checkpoint_file(pretrained_model)
+  variables_to_restore = []
+  var_to_dic = {}
+  # print(var_keep_dic)
+  for v in variables:
+    # exclude the conv weights that are fc weights in vgg16
+    if v.name == 'vgg_16/fc6/weights:0' or v.name == 'vgg_16/fc7/weights:0':
+      var_to_dic[v.name] = v
+      continue
+    if v.name.split(':')[0] in var_keep_dic:
+      print('Varibles restored: %s' % v.name)
+      variables_to_restore.append(v)
+  return variables_to_restore, var_to_dic
+
+
+
 def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
               pretrained_model=None,
               max_iters=40000):
@@ -352,12 +365,20 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
   else:
     train_op = optimizer.apply_gradients(gvs)
 
+  variables_to_restore, var_to_dic = restore_variable(pretrained_model)
+
+  def pre_load():
+    restorer = tf.train.Saver(variables_to_restore)
+    restorer.restore(sess, pretrained_model)
+    print('Loaded.')
+    pass
+
   sv = tf.train.Supervisor(logdir="output/supervisor",
                            summary_op=None,
                            # save_summaries_secs=10,
                            # local_init_op=tf.local_variables_initializer(),
                            # init_op=None,
-                           #init_fn=pre_load
+                           init_fn=pre_load
                            )
   # with tf.Session(config=tfconfig) as sess:
   # with sv.managed_session() as sess:
