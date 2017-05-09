@@ -347,15 +347,11 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
   lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
   momentum = cfg.TRAIN.MOMENTUM
   optimizer = tf.train.MomentumOptimizer(lr, momentum)
-  # 通过tf.train.SyncReplicasOptimizer函数实现同步更新。
   optimizer = tf.train.SyncReplicasOptimizer(
-    # 定义基础的优化方法。
     optimizer,
-    # 定义每一轮更新需要多少个计算服务器得出的梯度。
     replicas_to_aggregate=2,
-    # 指定总共有多少个计算服务器。
     total_num_replicas=2)
-
+  global_step = tf.Variable(0, trainable=False)
   # Compute the gradients wrt the loss
   gvs = optimizer.compute_gradients(loss)
   # Double the gradient of the bias if set
@@ -369,9 +365,9 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
         if not np.allclose(scale, 1.0):
           grad = tf.multiply(grad, scale)
         final_gvs.append((grad, var))
-    train_op = optimizer.apply_gradients(final_gvs)
+    train_op = optimizer.apply_gradients(final_gvs, global_step=global_step)
   else:
-    train_op = optimizer.apply_gradients(gvs)
+    train_op = optimizer.apply_gradients(gvs, global_step=global_step)
 
   variables_to_restore, var_to_dic = restore_variable(pretrained_model)
   restorer = tf.train.Saver(variables_to_restore)
@@ -381,7 +377,6 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
     print('Loaded.')
 
   if is_chief:
-    # 定义协调不同计算服务器的队列并定义初始化操作。
     chief_queue_runner = optimizer.get_chief_queue_runner()
     init_tokens_op = optimizer.get_init_tokens_op(0)
 

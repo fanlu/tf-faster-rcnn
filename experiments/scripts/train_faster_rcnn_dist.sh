@@ -67,7 +67,6 @@ if [ $JOB_NAME == "ps" ]; then
             --imdbval ${TEST_IMDB} \
             --iters ${ITERS} \
             --cfg experiments/cfgs/${NET}.yml \
-            --tag ${EXTRA_ARGS_SLUG} \
             --net ${NET} \
             --set ANCHOR_SCALES ${ANCHORS} ANCHOR_RATIOS ${RATIOS} TRAIN.STEPSIZE ${STEPSIZE} ${EXTRA_ARGS}
 else

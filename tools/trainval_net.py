@@ -61,8 +61,8 @@ def parse_args():
                       help='localhost:1121',
                       default='localhost:1121', type=str)
   parser.add_argument('--worker_hosts', dest='worker_hosts',
-                      help='localhost:1121,localhost:1122',
-                      default='localhost:1121,localhost:1122', type=str)
+                      help='localhost:1122,localhost:1123',
+                      default='localhost:1122,localhost:1123', type=str)
 
   if len(sys.argv) == 1:
     parser.print_help()
