@@ -51,6 +51,19 @@ def parse_args():
                       help='set config keys', default=None,
                       nargs=argparse.REMAINDER)
 
+  parser.add_argument('--job_name', dest='job_name',
+                      help='ps or worker',
+                      default='ps', type=str)
+  parser.add_argument('--task_index', dest='task_index',
+                      help='0,1',
+                      default='0', type=int)
+  parser.add_argument('--ps_hosts', dest='ps_hosts',
+                      help='localhost:1121',
+                      default='localhost:1121', type=str)
+  parser.add_argument('--worker_hosts', dest='worker_hosts',
+                      help='localhost:1121,localhost:1122',
+                      default='localhost:1121,localhost:1122', type=str)
+
   if len(sys.argv) == 1:
     parser.print_help()
     sys.exit(1)
@@ -100,32 +113,52 @@ if __name__ == '__main__':
 
   np.random.seed(cfg.RNG_SEED)
 
-  # train set
-  imdb, roidb = combined_roidb(args.imdb_name)
-  print('{:d} roidb entries'.format(len(roidb)))
+  ps_hosts = args.ps_hosts.split(',')
+  worker_hosts = args.worker_hosts.split(',')
+  tf.logging.info('PS hosts are: %s' % ps_hosts)
+  tf.logging.info('Worker hosts are: %s' % worker_hosts)
 
-  # output directory where the models are saved
-  output_dir = get_output_dir(imdb, args.tag)
-  print('Output will be saved to `{:s}`'.format(output_dir))
+  cluster_spec = tf.train.ClusterSpec({'ps': ps_hosts,
+                                       'worker': worker_hosts})
+  server = tf.train.Server(
+    {'ps': ps_hosts,
+     'worker': worker_hosts},
+    job_name=args.job_name,
+    task_index=args.task_index)
 
-  # tensorboard directory where the summaries are saved during training
-  tb_dir = get_output_tb_dir(imdb, args.tag)
-  print('TensorFlow summaries will be saved to `{:s}`'.format(tb_dir))
-
-  # also add the validation set, but with no flipping images
-  orgflip = cfg.TRAIN.USE_FLIPPED
-  cfg.TRAIN.USE_FLIPPED = False
-  _, valroidb = combined_roidb(args.imdbval_name)
-  print('{:d} validation roidb entries'.format(len(valroidb)))
-  cfg.TRAIN.USE_FLIPPED = orgflip
-
-  if args.net == 'vgg16':
-    net = vgg16(batch_size=cfg.TRAIN.IMS_PER_BATCH)
-  elif args.net == 'res101':
-    net = Resnet101(batch_size=cfg.TRAIN.IMS_PER_BATCH)
+  if args.job_name == 'ps':
+    server.join()
   else:
-    raise NotImplementedError
-    
-  train_net(net, imdb, roidb, valroidb, output_dir, tb_dir,
-            pretrained_model=args.weight,
-            max_iters=args.max_iters)
+    is_chief = (args.task_index == 0)
+    with tf.device(tf.train.replica_device_setter(
+        worker_device="/job:worker/task:%d" % args.task_index,
+        cluster=cluster_spec)):
+      # train set
+      imdb, roidb = combined_roidb(args.imdb_name)
+      print('{:d} roidb entries'.format(len(roidb)))
+
+      # output directory where the models are saved
+      output_dir = get_output_dir(imdb, args.tag)
+      print('Output will be saved to `{:s}`'.format(output_dir))
+
+      # tensorboard directory where the summaries are saved during training
+      tb_dir = get_output_tb_dir(imdb, args.tag)
+      print('TensorFlow summaries will be saved to `{:s}`'.format(tb_dir))
+
+      # also add the validation set, but with no flipping images
+      orgflip = cfg.TRAIN.USE_FLIPPED
+      cfg.TRAIN.USE_FLIPPED = False
+      _, valroidb = combined_roidb(args.imdbval_name)
+      print('{:d} validation roidb entries'.format(len(valroidb)))
+      cfg.TRAIN.USE_FLIPPED = orgflip
+
+      if args.net == 'vgg16':
+        net = vgg16(batch_size=cfg.TRAIN.IMS_PER_BATCH)
+      elif args.net == 'res101':
+        net = Resnet101(batch_size=cfg.TRAIN.IMS_PER_BATCH)
+      else:
+        raise NotImplementedError
+
+      train_net(net, imdb, roidb, valroidb, output_dir, tb_dir,
+                pretrained_model=args.weight,
+                max_iters=args.max_iters, master=server.target, is_chief=is_chief)

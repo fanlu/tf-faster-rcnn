@@ -101,10 +101,10 @@ class SolverWrapper(object):
     with sess.graph.as_default():
 
       # We will handle the snapshots ourselves
-      #self.saver = tf.train.Saver(max_to_keep=100000)
+      # self.saver = tf.train.Saver(max_to_keep=100000)
       # Write the train and validation information to tensorboard
       self.writer = tf.summary.FileWriter(self.tbdir, sess.graph)
-      #self.valwriter = tf.summary.FileWriter(self.tbvaldir)
+      # self.valwriter = tf.summary.FileWriter(self.tbvaldir)
 
     # Find previous snapshots if there is any to restore from
     sfiles = os.path.join(self.output_dir, cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_*.ckpt.meta')
@@ -127,21 +127,21 @@ class SolverWrapper(object):
     ss_paths = sfiles
 
     if lsf == 0:
-      variables_to_restore, var_to_dic = restore_variable(self.pretrained_model)
-      sess.run(tf.assign(lr, cfg.TRAIN.LEARNING_RATE))
+      # variables_to_restore, var_to_dic = restore_variable(self.pretrained_model)
+      # sess.run(tf.assign(lr, cfg.TRAIN.LEARNING_RATE))
       # A temporary solution to fix the vgg16 issue from conv weights to fc weights
-      if self.net._arch == 'vgg16':
-        print('Converting VGG16 fc layers..')
-        with tf.device("/cpu:0"):
-          fc6_conv = tf.get_variable("fc6_conv", [7, 7, 512, 4096], trainable=False)
-          fc7_conv = tf.get_variable("fc7_conv", [1, 1, 4096, 4096], trainable=False)
-          restorer_fc = tf.train.Saver({"vgg_16/fc6/weights": fc6_conv, "vgg_16/fc7/weights": fc7_conv})
-          restorer_fc.restore(sess, self.pretrained_model)
-
-          sess.run(tf.assign(var_to_dic['vgg_16/fc6/weights:0'], tf.reshape(fc6_conv, 
-                              var_to_dic['vgg_16/fc6/weights:0'].get_shape())))
-          sess.run(tf.assign(var_to_dic['vgg_16/fc7/weights:0'], tf.reshape(fc7_conv, 
-                              var_to_dic['vgg_16/fc7/weights:0'].get_shape())))
+      # if self.net._arch == 'vgg16':
+      #   print('Converting VGG16 fc layers..')
+      #   with tf.device("/cpu:0"):
+      #     fc6_conv = tf.get_variable("fc6_conv", [7, 7, 512, 4096], trainable=False)
+      #     fc7_conv = tf.get_variable("fc7_conv", [1, 1, 4096, 4096], trainable=False)
+      #     restorer_fc = tf.train.Saver({"vgg_16/fc6/weights": fc6_conv, "vgg_16/fc7/weights": fc7_conv})
+      #     restorer_fc.restore(sess, self.pretrained_model)
+      #
+      #     sess.run(tf.assign(var_to_dic['vgg_16/fc6/weights:0'], tf.reshape(fc6_conv,
+      #                         var_to_dic['vgg_16/fc6/weights:0'].get_shape())))
+      #     sess.run(tf.assign(var_to_dic['vgg_16/fc7/weights:0'], tf.reshape(fc7_conv,
+      #                         var_to_dic['vgg_16/fc7/weights:0'].get_shape())))
       last_snapshot_iter = 0
     else:
       # Get the most recent snapshot and restore
@@ -197,7 +197,7 @@ class SolverWrapper(object):
         # Also check the summary on the validation set
         blobs_val = self.data_layer_val.forward()
         summary_val = self.net.get_summary(sess, blobs_val)
-        self.valwriter.add_summary(summary_val, float(iter))
+        # self.valwriter.add_summary(summary_val, float(iter))
         last_summary_time = now
       else:
         # Compute the graph without summary
@@ -209,7 +209,7 @@ class SolverWrapper(object):
       if iter % (cfg.TRAIN.DISPLAY) == 0:
         print('iter: %d / %d, total loss: %.6f\n >>> rpn_loss_cls: %.6f\n '
               '>>> rpn_loss_box: %.6f\n >>> loss_cls: %.6f\n >>> loss_box: %.6f\n >>> lr: %f' % \
-              (iter, max_iters, total_loss, rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, lr.eval()))
+              (iter, max_iters, total_loss, rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, lr))
         print('speed: {:.3f}s / iter'.format(timer.average_time))
 
       if iter % cfg.TRAIN.SNAPSHOT_ITERS == 0:
@@ -325,12 +325,12 @@ def restore_variable(pretrained_model):
 
 def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
               pretrained_model=None,
-              max_iters=40000):
+              max_iters=40000, master="", is_chief=False):
   """Train a Fast R-CNN network."""
   roidb = filter_roidb(roidb)
   valroidb = filter_roidb(valroidb)
 
-  tfconfig = tf.ConfigProto(allow_soft_placement=True)
+  tfconfig = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
   tfconfig.gpu_options.allow_growth = True
 
   layers = network.create_architecture(None, 'TRAIN', imdb.num_classes, tag='default',
@@ -347,6 +347,14 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
   lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
   momentum = cfg.TRAIN.MOMENTUM
   optimizer = tf.train.MomentumOptimizer(lr, momentum)
+  # 通过tf.train.SyncReplicasOptimizer函数实现同步更新。
+  optimizer = tf.train.SyncReplicasOptimizer(
+    # 定义基础的优化方法。
+    optimizer,
+    # 定义每一轮更新需要多少个计算服务器得出的梯度。
+    replicas_to_aggregate=2,
+    # 指定总共有多少个计算服务器。
+    total_num_replicas=2)
 
   # Compute the gradients wrt the loss
   gvs = optimizer.compute_gradients(loss)
@@ -366,12 +374,17 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
     train_op = optimizer.apply_gradients(gvs)
 
   variables_to_restore, var_to_dic = restore_variable(pretrained_model)
+  restorer = tf.train.Saver(variables_to_restore)
 
-  def pre_load():
-    restorer = tf.train.Saver(variables_to_restore)
+  def pre_load(sess):
     restorer.restore(sess, pretrained_model)
     print('Loaded.')
-    pass
+
+  if is_chief:
+    # 定义协调不同计算服务器的队列并定义初始化操作。
+    chief_queue_runner = optimizer.get_chief_queue_runner()
+    init_tokens_op = optimizer.get_init_tokens_op(0)
+
 
   sv = tf.train.Supervisor(logdir="output/supervisor",
                            summary_op=None,
@@ -382,7 +395,12 @@ def train_net(network, imdb, roidb, valroidb, output_dir, tb_dir,
                            )
   # with tf.Session(config=tfconfig) as sess:
   # with sv.managed_session() as sess:
-  sess = sv.prepare_or_wait_for_session("")
+  sess = sv.prepare_or_wait_for_session(master, config=tfconfig)
+
+  if is_chief:
+    sv.start_queue_runners(sess, [chief_queue_runner])
+    sess.run(init_tokens_op)
+
   sw = SolverWrapper(sess, network, imdb, roidb, valroidb, output_dir, tb_dir,
                      pretrained_model=pretrained_model)
   print('Solving...')
